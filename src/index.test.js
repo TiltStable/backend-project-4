@@ -77,14 +77,37 @@ test("saves into process.cwd() when no output dir is given", async () => {
   expect(filePath).toBe(path.join(outputDir, "ru-hexlet-io-courses.html"));
 });
 
-test("creates the output directory when it does not exist", async () => {
+test("rejects when the output directory has a missing parent", async () => {
+  // the destination directory is created only when its parent exists:
+  // a missing directory chain is an error, not something to auto-create
   const nestedDir = path.join(outputDir, "sub", "dir");
   nock(ORIGIN).get("/courses").reply(200, PAGE_BODY);
 
-  const filePath = await downloadPage(PAGE_URL, nestedDir);
+  await expect(downloadPage(PAGE_URL, nestedDir)).rejects.toThrow(
+    `Failed to create output directory "${nestedDir}"`,
+  );
+  await expect(downloadPage(PAGE_URL, nestedDir)).rejects.toThrow("ENOENT");
+});
+
+test("rejects when the output path is an existing file", async () => {
+  nock(ORIGIN).get("/courses").reply(200, PAGE_BODY);
+  const filePath = path.join(outputDir, "blocker.txt");
+  await fs.writeFile(filePath, "not a directory");
+
+  await expect(downloadPage(PAGE_URL, filePath)).rejects.toThrow(
+    `Output path "${filePath}" exists and is not a directory`,
+  );
+});
+
+test("tolerates an existing output directory for repeat runs", async () => {
+  nock(ORIGIN).get("/courses").twice().reply(200, PAGE_BODY);
+
+  const filePath = await downloadPage(PAGE_URL, outputDir);
+  const filePath2 = await downloadPage(PAGE_URL, outputDir);
 
   const saved = await fs.readFile(filePath, "utf-8");
   expect(saved).toBe(PAGE_BODY);
+  expect(filePath2).toBe(filePath);
 });
 
 test("rejects on an http error", async () => {

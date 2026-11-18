@@ -91,6 +91,18 @@ page-loader --output /root/forbidden https://ru.hexlet.io/courses
 # Failed to create output directory "/root/forbidden": EACCES: permission denied, mkdir '/root/forbidden'
 ```
 
+Директория назначения создаётся, только если существует её родитель
+(повторный запуск в существующую директорию — норма); отсутствующая
+цепочка директорий — ошибка:
+
+```bash
+page-loader --output /var/tmp/new-dir https://ru.hexlet.io/courses
+# ok: /var/tmp существует
+
+page-loader --output /var/tmp/a/b/c https://ru.hexlet.io/courses
+# Failed to create output directory "/var/tmp/a/b/c": ENOENT: no such file or directory, mkdir '/var/tmp/a/b/c'
+```
+
 Аналогично оформлены ошибки скачивания и сохранения ресурсов
 (`Failed to download resource "<url>": …`, `Failed to save resource "<name>": …`)
 и записи страницы (`Failed to save page "<path>": …`).

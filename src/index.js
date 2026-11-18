@@ -197,39 +197,56 @@ const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
   const resourcesDirPath = path.join(outputDir, resourcesDirName(url));
   log("downloading %s into %s", url, outputDir);
 
-  return Promise.resolve()
-    .then(() => new URL(url))
-    .then(() =>
-      fs.mkdir(outputDir, { recursive: true }).catch((error) => {
-        throw wrapError(error, `Failed to create output directory "${outputDir}"`);
-      }),
-    )
-    .then(() =>
-      axios
-        .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" })
-        .catch((error) => {
-          throw wrapError(error, `Failed to download page "${url}"`);
+  return (
+    Promise.resolve()
+      .then(() => new URL(url))
+      // the destination directory is created only if its parent exists:
+      // a missing parent is an error (the course spec forbids auto-creating
+      // missing destination paths), an existing directory is fine,
+      // an existing non-directory path is an error too
+      .then(() =>
+        fs.mkdir(outputDir).catch((error) => {
+          if (error.code !== "EEXIST") {
+            throw wrapError(error, `Failed to create output directory "${outputDir}"`);
+          }
+          return fs.stat(outputDir).then((stat) => {
+            if (!stat.isDirectory()) {
+              throw new Error(`Output path "${outputDir}" exists and is not a directory`);
+            }
+          });
         }),
-    )
-    .then((response) => localizeResources(response.data, url))
-    .then((localized) => {
-      log("found %d local resources", localized.resources.length);
-      return localized;
-    })
-    .then((localized) => saveResources(localized, resourcesDirPath, requestOptions))
-    .then((localized) =>
-      fs.writeFile(htmlPath, localized.html).catch((error) => {
-        throw wrapError(error, `Failed to save page "${htmlPath}"`);
-      }),
-    )
-    .then(() => {
-      log("page saved to %s", htmlPath);
-      return path.resolve(htmlPath);
-    })
-    .catch((error) => {
-      log("failed to download %s: %s", url, error instanceof Error ? error.message : String(error));
-      throw error;
-    });
+      )
+      .then(() =>
+        axios
+          .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" })
+          .catch((error) => {
+            throw wrapError(error, `Failed to download page "${url}"`);
+          }),
+      )
+      .then((response) => localizeResources(response.data, url))
+      .then((localized) => {
+        log("found %d local resources", localized.resources.length);
+        return localized;
+      })
+      .then((localized) => saveResources(localized, resourcesDirPath, requestOptions))
+      .then((localized) =>
+        fs.writeFile(htmlPath, localized.html).catch((error) => {
+          throw wrapError(error, `Failed to save page "${htmlPath}"`);
+        }),
+      )
+      .then(() => {
+        log("page saved to %s", htmlPath);
+        return path.resolve(htmlPath);
+      })
+      .catch((error) => {
+        log(
+          "failed to download %s: %s",
+          url,
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      })
+  );
 };
 
 export default downloadPage;
