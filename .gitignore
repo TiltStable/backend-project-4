@@ -2,3 +2,4 @@ node_modules/
 .DS_Store
 *.cast
 MEMORY.md
+coverage/

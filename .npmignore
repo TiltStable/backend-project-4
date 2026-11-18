@@ -2,5 +2,6 @@
 src/**/*.test.js
 src/__fixtures__/
 vitest.config.js
+coverage/
 *.cast
 MEMORY.md
