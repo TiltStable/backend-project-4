@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import nock from "nock";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import downloadPage, { nameFromUrl, nameFromResourceUrl } from "./index.js";
+
+const runCli = promisify(execFile);
 
 const ORIGIN = "https://ru.hexlet.io";
 const PAGE_URL = `${ORIGIN}/courses`;
@@ -87,7 +91,7 @@ test("rejects on an http error", async () => {
   nock(ORIGIN).get("/courses").reply(404, "Not Found");
 
   await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
-    "Request failed with status code 404",
+    'Failed to download page "https://ru.hexlet.io/courses": Request failed with status code 404',
   );
 });
 
@@ -102,7 +106,7 @@ test("rejects when the server does not respond in time", async () => {
     .reply(200, () => new Promise(() => {}));
 
   await expect(downloadPage(PAGE_URL, outputDir, { timeout: 100 })).rejects.toThrow(
-    "timeout of 100ms exceeded",
+    'Failed to download page "https://ru.hexlet.io/courses": timeout of 100ms exceeded',
   );
 });
 
@@ -187,10 +191,76 @@ test("rejects and does not save the modified html when an image fails to downloa
   nock(ORIGIN).get("/assets/professions/nodejs.png").reply(404, "Not Found");
 
   await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
-    "Request failed with status code 404",
+    'Failed to download resource "https://ru.hexlet.io/assets/professions/nodejs.png": Request failed with status code 404',
   );
   const entries = await fs.readdir(outputDir);
   expect(entries).not.toContain("ru-hexlet-io-courses.html");
+});
+
+test("wraps output directory creation failures with a friendly message", async () => {
+  const accessError = new Error(`EACCES: permission denied, mkdir '${outputDir}'`);
+  vi.spyOn(fs, "mkdir").mockRejectedValueOnce(accessError);
+
+  await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
+    `Failed to create output directory "${outputDir}": EACCES: permission denied, mkdir '${outputDir}'`,
+  );
+});
+
+test("wraps resources directory creation failures separately from the output directory", async () => {
+  const html =
+    '<!DOCTYPE html><html><head></head><body><img src="/assets/logo.png" alt="logo"></body></html>';
+  nock(ORIGIN).get("/courses").reply(200, html);
+  const realMkdir = fs.mkdir;
+  const accessError = new Error("EACCES: permission denied, mkdir resources");
+  vi.spyOn(fs, "mkdir")
+    .mockImplementationOnce((dir, options) => realMkdir(dir, options))
+    .mockRejectedValueOnce(accessError);
+
+  const resourcesDir = path.join(outputDir, "ru-hexlet-io-courses_files");
+
+  await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
+    `Failed to create resources directory "${resourcesDir}": EACCES: permission denied, mkdir resources`,
+  );
+});
+
+test("wraps page write failures with a friendly message", async () => {
+  nock(ORIGIN).get("/courses").reply(200, PAGE_BODY);
+  const htmlPath = path.join(outputDir, "ru-hexlet-io-courses.html");
+  const accessError = new Error(`EACCES: permission denied, writeFile '${htmlPath}'`);
+  vi.spyOn(fs, "writeFile").mockRejectedValueOnce(accessError);
+
+  await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
+    `Failed to save page "${htmlPath}": EACCES: permission denied, writeFile '${htmlPath}'`,
+  );
+  const entries = await fs.readdir(outputDir);
+  expect(entries).toEqual([]);
+});
+
+test("wraps resource write failures with a friendly message", async () => {
+  nock(ORIGIN)
+    .get("/courses")
+    .reply(200, await loadFixture("courses-before.html"));
+  nock(ORIGIN).get("/assets/professions/nodejs.png").reply(200, PNG_BYTES);
+  const accessError = new Error("EACCES: permission denied, write resource");
+  vi.spyOn(fs, "writeFile").mockRejectedValueOnce(accessError);
+
+  await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
+    'Failed to save resource "ru-hexlet-io-assets-professions-nodejs.png": EACCES: permission denied, write resource',
+  );
+  const entries = await fs.readdir(outputDir);
+  expect(entries).not.toContain("ru-hexlet-io-courses.html");
+});
+
+test("cli exits non-zero, reports to stderr and keeps stdout empty on failure", async () => {
+  const failure = await runCli("node", ["bin/page-loader.js", "not-a-url"]).then(
+    () => null,
+    (error) => error,
+  );
+
+  expect(failure).not.toBeNull();
+  expect(failure.code).toBe(1);
+  expect(failure.stderr).toContain("Invalid URL");
+  expect(failure.stdout).toBe("");
 });
 
 test("caps overly long resource names deterministically keeping the extension", () => {

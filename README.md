@@ -74,6 +74,24 @@ src>`), стили и другие файлы из `<link href>`, скрипты
 сохраняется, а уже скачанные файлы остаются в `_files` (повторный запуск
 переиспользует директорию — имена файлов детерминированы).
 
+## Ошибки
+
+Сообщения об ошибках выводятся в stderr, код возврата — `1` (успех — `0`),
+что позволяет использовать утилиту в скриптах и CI. Сообщение называет
+операцию и проблемный объект:
+
+```bash
+page-loader --output /var/tmp https://ru.hexlet.io/missing-page
+# Failed to download page "https://ru.hexlet.io/missing-page": Request failed with status code 404
+
+page-loader --output /root/forbidden https://ru.hexlet.io/courses
+# Failed to create output directory "/root/forbidden": EACCES: permission denied, mkdir '/root/forbidden'
+```
+
+Аналогично оформлены ошибки скачивания и сохранения ресурсов
+(`Failed to download resource "<url>": …`, `Failed to save resource "<name>": …`)
+и записи страницы (`Failed to save page "<path>": …`).
+
 ## Отладка
 
 Утилита логирует через библиотеку [`debug`](https://github.com/debug-js/debug).
@@ -126,6 +144,10 @@ DEBUG="page-loader*,axios" NODE_DEBUG="nock:*" npm test
 [Пример логирования](https://asciinema.org/a/QeGW9W229wGrCHQn): обычный
 запуск без логов, запуск с `DEBUG="page-loader*,axios"` (логи приложения
 и HTTP), логирование ошибки.
+
+[Обработка ошибок](https://asciinema.org/a/FXP7U2tSix5Zbgj3): HTTP-ошибка
+404 и ошибка доступа к директории — понятные сообщения в stderr и код
+возврата 1 после каждого прогона.
 
 ---
 

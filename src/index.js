@@ -66,6 +66,11 @@ export const nameFromResourceUrl = (url) => {
 
 const resourcesDirName = (pageUrl) => nameFromUrl(pageUrl).replace(/\.html$/, "_files");
 
+const wrapError = (error, message) =>
+  new Error(`${message}: ${error instanceof Error ? error.message : String(error)}`, {
+    cause: error,
+  });
+
 const resolveResourceUrl = (rawSource, pageUrl, context) => {
   try {
     return new URL(rawSource, pageUrl).href;
@@ -163,15 +168,27 @@ const saveResources = (localized, resourcesDirPath, requestOptions) => {
   }
   return fs
     .mkdir(resourcesDirPath, { recursive: true })
+    .catch((error) => {
+      throw wrapError(error, `Failed to create resources directory "${resourcesDirPath}"`);
+    })
     .then(() =>
       downloadAll(
         localized.resources.map(
           (resource) => () =>
-            fetchResource(resource.url, requestOptions).then((data) =>
-              fs.writeFile(path.join(resourcesDirPath, resource.name), data).then(() => {
-                log("saved %s", resource.name);
-              }),
-            ),
+            fetchResource(resource.url, requestOptions)
+              .catch((error) => {
+                throw wrapError(error, `Failed to download resource "${resource.url}"`);
+              })
+              .then((data) =>
+                fs
+                  .writeFile(path.join(resourcesDirPath, resource.name), data)
+                  .catch((error) => {
+                    throw wrapError(error, `Failed to save resource "${resource.name}"`);
+                  })
+                  .then(() => {
+                    log("saved %s", resource.name);
+                  }),
+              ),
         ),
         RESOURCE_DOWNLOAD_CONCURRENCY,
       ),
@@ -186,9 +203,17 @@ const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
 
   return Promise.resolve()
     .then(() => new URL(url))
-    .then(() => fs.mkdir(outputDir, { recursive: true }))
     .then(() =>
-      axios.get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" }),
+      fs.mkdir(outputDir, { recursive: true }).catch((error) => {
+        throw wrapError(error, `Failed to create output directory "${outputDir}"`);
+      }),
+    )
+    .then(() =>
+      axios
+        .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" })
+        .catch((error) => {
+          throw wrapError(error, `Failed to download page "${url}"`);
+        }),
     )
     .then((response) => localizeResources(response.data, url))
     .then((localized) => {
@@ -196,7 +221,11 @@ const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
       return localized;
     })
     .then((localized) => saveResources(localized, resourcesDirPath, requestOptions))
-    .then((localized) => fs.writeFile(htmlPath, localized.html))
+    .then((localized) =>
+      fs.writeFile(htmlPath, localized.html).catch((error) => {
+        throw wrapError(error, `Failed to save page "${htmlPath}"`);
+      }),
+    )
     .then(() => {
       log("page saved to %s", htmlPath);
       return path.resolve(htmlPath);
