@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import * as cheerio from "cheerio";
 import debug from "debug";
+import Listr from "listr";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
@@ -143,25 +144,6 @@ const fetchResource = (url, requestOptions) =>
     .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "arraybuffer" })
     .then((response) => Buffer.from(response.data));
 
-// bounded worker pool: at most `concurrency` downloads are in flight at once,
-// so a page with many images does not flood the origin server
-const downloadAll = (tasks, concurrency) => {
-  let nextIndex = 0;
-  const runNext = () => {
-    if (nextIndex >= tasks.length) {
-      return Promise.resolve();
-    }
-    const task = tasks[nextIndex];
-    nextIndex += 1;
-    return task().then(runNext);
-  };
-  const workers = [];
-  for (let i = 0; i < Math.min(concurrency, tasks.length); i += 1) {
-    workers.push(runNext());
-  }
-  return Promise.all(workers);
-};
-
 const saveResources = (localized, resourcesDirPath, requestOptions) => {
   if (localized.resources.length === 0) {
     return Promise.resolve(localized);
@@ -171,10 +153,11 @@ const saveResources = (localized, resourcesDirPath, requestOptions) => {
     .catch((error) => {
       throw wrapError(error, `Failed to create resources directory "${resourcesDirPath}"`);
     })
-    .then(() =>
-      downloadAll(
-        localized.resources.map(
-          (resource) => () =>
+    .then(() => {
+      const tasks = new Listr(
+        localized.resources.map((resource) => ({
+          title: resource.url,
+          task: () =>
             fetchResource(resource.url, requestOptions)
               .catch((error) => {
                 throw wrapError(error, `Failed to download resource "${resource.url}"`);
@@ -189,11 +172,24 @@ const saveResources = (localized, resourcesDirPath, requestOptions) => {
                     log("saved %s", resource.name);
                   }),
               ),
-        ),
-        RESOURCE_DOWNLOAD_CONCURRENCY,
-      ),
-    )
-    .then(() => localized);
+        })),
+        {
+          concurrent: RESOURCE_DOWNLOAD_CONCURRENCY,
+          exitOnError: true,
+          nonTTYRenderer: "silent",
+        },
+      );
+      return (
+        tasks
+          .run()
+          // exitOnError: true → run() rejects with the first task error as-is;
+          // the errors[] branch covers exitOnError: false
+          .catch((error) => {
+            throw Array.isArray(error.errors) && error.errors.length > 0 ? error.errors[0] : error;
+          })
+          .then(() => localized)
+      );
+    });
 };
 
 const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {

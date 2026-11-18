@@ -1,6 +1,6 @@
 {
   "name": "@hexlet/code",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Page loader - downloads a web page and saves it locally with rewritten paths (Hexlet backend-project-4)",
   "main": "src/index.js",
   "scripts": {
@@ -35,7 +35,8 @@
     "axios-debug-log": "^1.0.0",
     "cheerio": "^1.2.0",
     "commander": "15.1.0",
-    "debug": "^4.4.3"
+    "debug": "^4.4.3",
+    "listr": "^0.14.3"
   },
   "devDependencies": {
     "nock": "^15.0.6",
