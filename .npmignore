@@ -1,5 +1,6 @@
 .github
 src/**/*.test.js
+src/__fixtures__/
 vitest.config.js
 *.cast
 MEMORY.md

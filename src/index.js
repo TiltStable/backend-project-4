@@ -1,6 +1,12 @@
+import * as cheerio from "cheerio";
 import axios from "axios";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+
+const DEFAULT_TIMEOUT = 30000;
+const RESOURCE_ATTRIBUTES = [["img", "src"]];
+const MAX_RESOURCE_NAME_LENGTH = 150;
+const RESOURCE_DOWNLOAD_CONCURRENCY = 5;
 
 export const nameFromUrl = (url) => {
   const withoutProtocol = url.replace(/^[a-zA-Z]+:\/\//, "");
@@ -8,18 +14,149 @@ export const nameFromUrl = (url) => {
   return `${normalized}.html`;
 };
 
-const DEFAULT_TIMEOUT = 10000;
+const shortHash = (value) => {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) % 0xffffffff;
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
 
-const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) =>
-  Promise.resolve()
+export const nameFromResourceUrl = (url) => {
+  const { origin, pathname } = new URL(url);
+  const extension = pathname.match(/\.([a-zA-Z0-9]{1,12})$/);
+  const withoutExtension = extension ? pathname.slice(0, -extension[0].length) : pathname;
+  const withoutProtocol = `${origin}${withoutExtension}`.replace(/^[a-zA-Z]+:\/\//, "");
+  const normalized = withoutProtocol.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase();
+  const extensionSuffix = extension ? `.${extension[1]}` : "";
+  const fullName = `${normalized}${extensionSuffix}`;
+  if (fullName.length <= MAX_RESOURCE_NAME_LENGTH) {
+    return fullName;
+  }
+  const hashSuffix = `-${shortHash(fullName)}`;
+  const cutAt = Math.max(0, MAX_RESOURCE_NAME_LENGTH - hashSuffix.length - extensionSuffix.length);
+  return `${normalized.slice(0, cutAt)}${hashSuffix}${extensionSuffix}`;
+};
+
+const resourcesDirName = (pageUrl) => nameFromUrl(pageUrl).replace(/\.html$/, "_files");
+
+const resolveResourceUrl = (rawSource, pageUrl) => {
+  try {
+    return new URL(rawSource, pageUrl).href;
+  } catch {
+    throw new Error(`Invalid image src "${rawSource}"`);
+  }
+};
+
+const localizeResources = (html, pageUrl) => {
+  const $ = cheerio.load(html);
+  const resourcesDir = resourcesDirName(pageUrl);
+  const namesByResourceUrl = new Map();
+  const claimedNames = new Set();
+
+  // case-insensitive filesystems treat names differing only in case as one file,
+  // so every claimed name reserves room for its suffix: the attempt counter always
+  // survives the length cap, which guarantees the loop terminates
+  const claimUniqueName = (baseName, resourceUrl) => {
+    let candidate = baseName;
+    let attempt = 0;
+    while (claimedNames.has(candidate.toLowerCase())) {
+      attempt += 1;
+      if (attempt > 100) {
+        throw new Error(`Cannot build a unique name for resource ${resourceUrl}`);
+      }
+      const dotIndex = baseName.lastIndexOf(".");
+      const extension = dotIndex > 0 ? baseName.slice(dotIndex) : "";
+      const base = dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName;
+      const suffix = `-${shortHash(resourceUrl)}${attempt > 1 ? attempt : ""}`;
+      const room = Math.max(0, MAX_RESOURCE_NAME_LENGTH - suffix.length - extension.length);
+      candidate = `${base.slice(0, room)}${suffix}${extension}`;
+    }
+    claimedNames.add(candidate.toLowerCase());
+    return candidate;
+  };
+
+  for (const [tag, attribute] of RESOURCE_ATTRIBUTES) {
+    $(tag).each((_, element) => {
+      const rawSource = $(element).attr(attribute);
+      if (!rawSource || !rawSource.trim() || rawSource.startsWith("#")) {
+        return;
+      }
+      const resourceUrl = resolveResourceUrl(rawSource, pageUrl);
+      if (namesByResourceUrl.has(resourceUrl)) {
+        $(element).attr(attribute, `${resourcesDir}/${namesByResourceUrl.get(resourceUrl)}`);
+        return;
+      }
+      const name = claimUniqueName(nameFromResourceUrl(resourceUrl), resourceUrl);
+      namesByResourceUrl.set(resourceUrl, name);
+      $(element).attr(attribute, `${resourcesDir}/${namesByResourceUrl.get(resourceUrl)}`);
+    });
+  }
+
+  return {
+    html: $.html(),
+    resources: [...namesByResourceUrl].map(([resourceUrl, name]) => ({ url: resourceUrl, name })),
+  };
+};
+
+const fetchResource = (url, requestOptions) =>
+  axios
+    .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "arraybuffer" })
+    .then((response) => Buffer.from(response.data));
+
+// bounded worker pool: at most `concurrency` downloads are in flight at once,
+// so a page with many images does not flood the origin server
+const downloadAll = (tasks, concurrency) => {
+  let nextIndex = 0;
+  const runNext = () => {
+    if (nextIndex >= tasks.length) {
+      return Promise.resolve();
+    }
+    const task = tasks[nextIndex];
+    nextIndex += 1;
+    return task().then(runNext);
+  };
+  const workers = [];
+  for (let i = 0; i < Math.min(concurrency, tasks.length); i += 1) {
+    workers.push(runNext());
+  }
+  return Promise.all(workers);
+};
+
+const saveResources = (localized, resourcesDirPath, requestOptions) => {
+  if (localized.resources.length === 0) {
+    return Promise.resolve(localized);
+  }
+  return fs
+    .mkdir(resourcesDirPath, { recursive: true })
+    .then(() =>
+      downloadAll(
+        localized.resources.map(
+          (resource) => () =>
+            fetchResource(resource.url, requestOptions).then((data) =>
+              fs.writeFile(path.join(resourcesDirPath, resource.name), data),
+            ),
+        ),
+        RESOURCE_DOWNLOAD_CONCURRENCY,
+      ),
+    )
+    .then(() => localized);
+};
+
+const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
+  const htmlPath = path.join(outputDir, nameFromUrl(url));
+  const resourcesDirPath = path.join(outputDir, resourcesDirName(url));
+
+  return Promise.resolve()
     .then(() => new URL(url))
     .then(() => fs.mkdir(outputDir, { recursive: true }))
     .then(() =>
-      axios.get(url, { responseType: "text", timeout: DEFAULT_TIMEOUT, ...requestOptions }),
+      axios.get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" }),
     )
-    .then((response) => {
-      const filePath = path.join(outputDir, nameFromUrl(url));
-      return fs.writeFile(filePath, response.data).then(() => path.resolve(filePath));
-    });
+    .then((response) => localizeResources(response.data, url))
+    .then((localized) => saveResources(localized, resourcesDirPath, requestOptions))
+    .then((localized) => fs.writeFile(htmlPath, localized.html))
+    .then(() => path.resolve(htmlPath));
+};
 
 export default downloadPage;
