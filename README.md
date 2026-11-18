@@ -74,6 +74,41 @@ src>`), стили и другие файлы из `<link href>`, скрипты
 сохраняется, а уже скачанные файлы остаются в `_files` (повторный запуск
 переиспользует директорию — имена файлов детерминированы).
 
+## Отладка
+
+Утилита логирует через библиотеку [`debug`](https://github.com/debug-js/debug).
+По умолчанию логи выключены и включаются переменной окружения `DEBUG`:
+
+```bash
+# лог приложения (неймспейс page-loader)
+DEBUG=page-loader* page-loader --output /var/tmp https://ru.hexlet.io/courses
+
+# лог HTTP-запросов axios (через axios-debug-log)
+DEBUG=axios page-loader https://ru.hexlet.io/courses
+
+# всё вместе
+DEBUG=page-loader*,axios page-loader https://ru.hexlet.io/courses
+```
+
+Пример вывода:
+
+```
+page-loader downloading https://ru.hexlet.io/courses into /var/tmp
+axios GET https://ru.hexlet.io/courses
+axios 200 https://ru.hexlet.io/courses
+page-loader found 81 local resources
+axios 200 https://ru.hexlet.io/packs/js/runtime.js
+page-loader saved ru-hexlet-io-packs-js-runtime.js
+page-loader page saved to /var/tmp/ru-hexlet-io-courses.html
+```
+
+Логирование nock в тестах: nock (начиная с v13) использует не `debug`, а
+встроенный `util.debuglog` Node.js, поэтому включается через `NODE_DEBUG`:
+
+```bash
+DEBUG="page-loader*,axios" NODE_DEBUG="nock:*" npm test
+```
+
 ## Аскинема
 
 [Скачивание страницы](https://asciinema.org/a/8E8ycEpdMeFa1QaL): с указанной
@@ -87,6 +122,10 @@ src>`), стили и другие файлы из `<link href>`, скрипты
 [Скачивание css/js и остальных локальных ресурсов](https://asciinema.org/a/HQg2BzF1ARMimQag):
 81 файл в `_files` (стили, скрипты, иконки), переписанные `href` и `src`,
 84 локализованные ссылки в HTML.
+
+[Пример логирования](https://asciinema.org/a/QeGW9W229wGrCHQn): обычный
+запуск без логов, запуск с `DEBUG="page-loader*,axios"` (логи приложения
+и HTTP), логирование ошибки.
 
 ---
 

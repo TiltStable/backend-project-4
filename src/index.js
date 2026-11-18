@@ -1,7 +1,27 @@
+import { createRequire } from "node:module";
 import * as cheerio from "cheerio";
-import axios from "axios";
+import debug from "debug";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+
+// axios-debug-log patches the axios instance it can require (the CJS build).
+// In an ESM project a plain `import axios` loads a SECOND instance the logging
+// never sees, so the whole library uses the CJS instance — the ESM recipe
+// from the axios-debug-log README.
+const require_ = createRequire(import.meta.url);
+const axios = require_("axios");
+const axiosDebugLog = require_("axios-debug-log");
+
+const log = debug("page-loader");
+
+// the "axios" namespace is created inside axios-debug-log itself; its options
+// API accepts only request/response/error handlers
+axiosDebugLog({
+  request: (d, config) => d(`${(config.method || "get").toUpperCase()} ${config.url}`),
+  response: (d, response) => d(`${response.status} ${response.config && response.config.url}`),
+  error: (d, error) =>
+    d(`error ${error.message} on ${(error.config && error.config.url) || "unknown url"}`),
+});
 
 const DEFAULT_TIMEOUT = 30000;
 const RESOURCE_ATTRIBUTES = [
@@ -148,7 +168,9 @@ const saveResources = (localized, resourcesDirPath, requestOptions) => {
         localized.resources.map(
           (resource) => () =>
             fetchResource(resource.url, requestOptions).then((data) =>
-              fs.writeFile(path.join(resourcesDirPath, resource.name), data),
+              fs.writeFile(path.join(resourcesDirPath, resource.name), data).then(() => {
+                log("saved %s", resource.name);
+              }),
             ),
         ),
         RESOURCE_DOWNLOAD_CONCURRENCY,
@@ -160,6 +182,7 @@ const saveResources = (localized, resourcesDirPath, requestOptions) => {
 const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
   const htmlPath = path.join(outputDir, nameFromUrl(url));
   const resourcesDirPath = path.join(outputDir, resourcesDirName(url));
+  log("downloading %s into %s", url, outputDir);
 
   return Promise.resolve()
     .then(() => new URL(url))
@@ -168,9 +191,20 @@ const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
       axios.get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" }),
     )
     .then((response) => localizeResources(response.data, url))
+    .then((localized) => {
+      log("found %d local resources", localized.resources.length);
+      return localized;
+    })
     .then((localized) => saveResources(localized, resourcesDirPath, requestOptions))
     .then((localized) => fs.writeFile(htmlPath, localized.html))
-    .then(() => path.resolve(htmlPath));
+    .then(() => {
+      log("page saved to %s", htmlPath);
+      return path.resolve(htmlPath);
+    })
+    .catch((error) => {
+      log("failed to download %s: %s", url, error instanceof Error ? error.message : String(error));
+      throw error;
+    });
 };
 
 export default downloadPage;
