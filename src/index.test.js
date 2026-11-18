@@ -133,18 +133,18 @@ test("downloads images into a _files directory and rewrites the page html", asyn
   expect(Buffer.compare(imageBytes, PNG_BYTES)).toBe(0);
 });
 
-test("downloads images from other origins naming them by their absolute url", async () => {
+test("ignores images from other origins leaving their src untouched", async () => {
   const html =
     '<!DOCTYPE html><html><head></head><body><img src="https://cdn.example.com/img/logo.jpg" alt="logo"></body></html>';
   nock(ORIGIN).get("/courses").reply(200, html);
-  nock("https://cdn.example.com").get("/img/logo.jpg").reply(200, JPG_BYTES);
 
-  await downloadPage(PAGE_URL, outputDir);
+  const filePath = await downloadPage(PAGE_URL, outputDir);
 
-  const imageBytes = await fs.readFile(
-    path.join(outputDir, "ru-hexlet-io-courses_files", "cdn-example-com-img-logo.jpg"),
-  );
-  expect(Buffer.compare(imageBytes, JPG_BYTES)).toBe(0);
+  const savedHtml = await fs.readFile(filePath, "utf-8");
+  expect(savedHtml).toContain('src="https://cdn.example.com/img/logo.jpg"');
+  // no local resources → the _files directory is not created at all
+  const entries = await fs.readdir(outputDir);
+  expect(entries).toEqual(["ru-hexlet-io-courses.html"]);
 });
 
 test("downloads a duplicate image once and rewrites every reference", async () => {
@@ -213,21 +213,21 @@ test("caps overly long resource names deterministically keeping the extension", 
 test("keeps case-differing image urls in separate files on a case-insensitive filesystem", async () => {
   const html =
     "<!DOCTYPE html><html><head></head><body>" +
-    '<img src="https://cdn.example.com/Assets/X.png" alt="upper">' +
-    '<img src="https://cdn.example.com/assets/x.png" alt="lower">' +
+    '<img src="/Assets/X.png" alt="upper">' +
+    '<img src="/assets/x.png" alt="lower">' +
     "</body></html>";
   nock(ORIGIN).get("/courses").reply(200, html);
-  nock("https://cdn.example.com").get("/Assets/X.png").reply(200, PNG_BYTES);
-  nock("https://cdn.example.com").get("/assets/x.png").reply(200, JPG_BYTES);
+  nock(ORIGIN).get("/Assets/X.png").reply(200, PNG_BYTES);
+  nock(ORIGIN).get("/assets/x.png").reply(200, JPG_BYTES);
 
   await downloadPage(PAGE_URL, outputDir);
 
   const resourcesDir = path.join(outputDir, "ru-hexlet-io-courses_files");
   const dirEntries = await fs.readdir(resourcesDir);
   expect(dirEntries).toHaveLength(2);
-  const upperBytes = await fs.readFile(path.join(resourcesDir, "cdn-example-com-assets-x.png"));
+  const upperBytes = await fs.readFile(path.join(resourcesDir, "ru-hexlet-io-assets-x.png"));
   expect(Buffer.compare(upperBytes, PNG_BYTES)).toBe(0);
-  const disambiguated = dirEntries.find((name) => name !== "cdn-example-com-assets-x.png");
+  const disambiguated = dirEntries.find((name) => name !== "ru-hexlet-io-assets-x.png");
   const lowerBytes = await fs.readFile(path.join(resourcesDir, disambiguated));
   expect(Buffer.compare(lowerBytes, JPG_BYTES)).toBe(0);
 });
@@ -235,17 +235,17 @@ test("keeps case-differing image urls in separate files on a case-insensitive fi
 test("gives every colliding image url its own file with intact bytes", async () => {
   const html =
     "<!DOCTYPE html><html><head></head><body>" +
-    '<img src="https://cdn.example.com/x.png" alt="one">' +
-    '<img src="https://cdn.example.com/X.png" alt="two">' +
-    '<img src="https://cdn.example.com/x.PNG" alt="three">' +
+    '<img src="/x.png" alt="one">' +
+    '<img src="/X.png" alt="two">' +
+    '<img src="/x.PNG" alt="three">' +
     "</body></html>";
   const PAYLOAD_A = Buffer.from([0x01, 0x02, 0x03, 0x04]);
   const PAYLOAD_B = Buffer.from([0xa1, 0xa2, 0xa3, 0xa4]);
   const PAYLOAD_C = Buffer.from([0xc1, 0xc2, 0xc3, 0xc4]);
   nock(ORIGIN).get("/courses").reply(200, html);
-  nock("https://cdn.example.com").get("/x.png").reply(200, PAYLOAD_A);
-  nock("https://cdn.example.com").get("/X.png").reply(200, PAYLOAD_B);
-  nock("https://cdn.example.com").get("/x.PNG").reply(200, PAYLOAD_C);
+  nock(ORIGIN).get("/x.png").reply(200, PAYLOAD_A);
+  nock(ORIGIN).get("/X.png").reply(200, PAYLOAD_B);
+  nock(ORIGIN).get("/x.PNG").reply(200, PAYLOAD_C);
 
   await downloadPage(PAGE_URL, outputDir);
 
@@ -266,14 +266,14 @@ test("gives every colliding image url its own file with intact bytes", async () 
 test("resolves long colliding resource names without hanging", async () => {
   const html =
     "<!DOCTYPE html><html><head></head><body>" +
-    `<img src="https://cdn.example.com/a/${"X".repeat(200)}.png" alt="upper">` +
-    `<img src="https://cdn.example.com/a/${"x".repeat(200)}.png" alt="lower">` +
+    `<img src="/a/${"X".repeat(200)}.png" alt="upper">` +
+    `<img src="/a/${"x".repeat(200)}.png" alt="lower">` +
     "</body></html>";
   nock(ORIGIN).get("/courses").reply(200, html);
-  nock("https://cdn.example.com")
+  nock(ORIGIN)
     .get(`/a/${"X".repeat(200)}.png`)
     .reply(200, PNG_BYTES);
-  nock("https://cdn.example.com")
+  nock(ORIGIN)
     .get(`/a/${"x".repeat(200)}.png`)
     .reply(200, JPG_BYTES);
 
@@ -307,12 +307,50 @@ test("skips fragment-only and whitespace-only image sources", async () => {
   expect(savedHtml).toContain('src="#"');
 });
 
-test("rejects with a helpful message when an image src is not a valid url", async () => {
+test("rejects with a helpful message when a resource src is not a valid url", async () => {
   const html =
     '<!DOCTYPE html><html><head></head><body><img src="http://[bad" alt="broken"></body></html>';
   nock(ORIGIN).get("/courses").reply(200, html);
 
   await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
-    'Invalid image src "http://[bad"',
+    'Invalid resource img[src] "http://[bad"',
   );
+});
+
+test("downloads local link and script resources rewriting their references", async () => {
+  const before = await loadFixture("resources-before.html");
+  const after = await loadFixture("resources-after.html");
+  // the canonical link resolves to the page itself, so /courses is served twice
+  nock(ORIGIN).get("/courses").twice().reply(200, before);
+  const CSS_BYTES = Buffer.from("body { color: rebeccapurple; }");
+  const JS_BYTES = Buffer.from("console.log('runtime');");
+  nock(ORIGIN).get("/assets/professions/nodejs.png").reply(200, PNG_BYTES);
+  nock(ORIGIN).get("/assets/application.css").reply(200, CSS_BYTES);
+  nock(ORIGIN).get("/packs/js/runtime.js").reply(200, JS_BYTES);
+
+  const filePath = await downloadPage(PAGE_URL, outputDir);
+
+  const savedHtml = await fs.readFile(filePath, "utf-8");
+  const { load } = await import("cheerio");
+  expect(load(savedHtml).html()).toBe(load(after).html());
+  expect(savedHtml).toContain(
+    'href="ru-hexlet-io-courses_files/ru-hexlet-io-assets-application.css"',
+  );
+  expect(savedHtml).toContain(
+    'href="ru-hexlet-io-courses_files/ru-hexlet-io-courses.html" rel="canonical"',
+  );
+  expect(savedHtml).toContain('src="ru-hexlet-io-courses_files/ru-hexlet-io-packs-js-runtime.js"');
+  // foreign hosts stay untouched
+  expect(savedHtml).toContain('href="https://cdn2.hexlet.io/assets/menu.css"');
+  expect(savedHtml).toContain('src="https://js.stripe.com/v3/"');
+
+  const resourcesDir = path.join(outputDir, "ru-hexlet-io-courses_files");
+  const cssBytes = await fs.readFile(
+    path.join(resourcesDir, "ru-hexlet-io-assets-application.css"),
+  );
+  expect(Buffer.compare(cssBytes, CSS_BYTES)).toBe(0);
+  const jsBytes = await fs.readFile(path.join(resourcesDir, "ru-hexlet-io-packs-js-runtime.js"));
+  expect(Buffer.compare(jsBytes, JS_BYTES)).toBe(0);
+  const canonicalBytes = await fs.readFile(path.join(resourcesDir, "ru-hexlet-io-courses.html"));
+  expect(canonicalBytes.toString()).toBe(before);
 });

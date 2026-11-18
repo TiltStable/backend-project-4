@@ -4,7 +4,11 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 
 const DEFAULT_TIMEOUT = 30000;
-const RESOURCE_ATTRIBUTES = [["img", "src"]];
+const RESOURCE_ATTRIBUTES = [
+  ["img", "src"],
+  ["link", "href"],
+  ["script", "src"],
+];
 const MAX_RESOURCE_NAME_LENGTH = 150;
 const RESOURCE_DOWNLOAD_CONCURRENCY = 5;
 
@@ -28,7 +32,9 @@ export const nameFromResourceUrl = (url) => {
   const withoutExtension = extension ? pathname.slice(0, -extension[0].length) : pathname;
   const withoutProtocol = `${origin}${withoutExtension}`.replace(/^[a-zA-Z]+:\/\//, "");
   const normalized = withoutProtocol.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase();
-  const extensionSuffix = extension ? `.${extension[1]}` : "";
+  // resources without an extension (e.g. a canonical link to the page itself)
+  // are saved as html, like the course fixture requires
+  const extensionSuffix = extension ? `.${extension[1]}` : ".html";
   const fullName = `${normalized}${extensionSuffix}`;
   if (fullName.length <= MAX_RESOURCE_NAME_LENGTH) {
     return fullName;
@@ -40,13 +46,18 @@ export const nameFromResourceUrl = (url) => {
 
 const resourcesDirName = (pageUrl) => nameFromUrl(pageUrl).replace(/\.html$/, "_files");
 
-const resolveResourceUrl = (rawSource, pageUrl) => {
+const resolveResourceUrl = (rawSource, pageUrl, context) => {
   try {
     return new URL(rawSource, pageUrl).href;
   } catch {
-    throw new Error(`Invalid image src "${rawSource}"`);
+    throw new Error(`Invalid resource ${context} "${rawSource}"`);
   }
 };
+
+// the course fixture overrides the "subdomains" wording: only the exact
+// same hostname counts as local (cdn2.hexlet.io is ignored for ru.hexlet.io)
+const isLocalResource = (resourceUrl, pageUrl) =>
+  new URL(resourceUrl).hostname === new URL(pageUrl).hostname;
 
 const localizeResources = (html, pageUrl) => {
   const $ = cheerio.load(html);
@@ -82,7 +93,10 @@ const localizeResources = (html, pageUrl) => {
       if (!rawSource || !rawSource.trim() || rawSource.startsWith("#")) {
         return;
       }
-      const resourceUrl = resolveResourceUrl(rawSource, pageUrl);
+      const resourceUrl = resolveResourceUrl(rawSource, pageUrl, `${tag}[${attribute}]`);
+      if (!isLocalResource(resourceUrl, pageUrl)) {
+        return;
+      }
       if (namesByResourceUrl.has(resourceUrl)) {
         $(element).attr(attribute, `${resourcesDir}/${namesByResourceUrl.get(resourceUrl)}`);
         return;
