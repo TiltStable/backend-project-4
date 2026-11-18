@@ -91,16 +91,16 @@ page-loader --output /root/forbidden https://ru.hexlet.io/courses
 # Failed to create output directory "/root/forbidden": EACCES: permission denied, mkdir '/root/forbidden'
 ```
 
-Директория назначения создаётся, только если существует её родитель
-(повторный запуск в существующую директорию — норма); отсутствующая
-цепочка директорий — ошибка:
+Директория назначения должна существовать к моменту запуска (её отсутствие
+и путь-не-директория — ошибки; сама директория `_files` утилита создаёт
+самостоятельно):
 
 ```bash
-page-loader --output /var/tmp/new-dir https://ru.hexlet.io/courses
-# ok: /var/tmp существует
+page-loader --output /var/tmp/missing https://ru.hexlet.io/courses
+# Output directory "/var/tmp/missing" does not exist: ENOENT: no such file or directory, stat '/var/tmp/missing'
 
-page-loader --output /var/tmp/a/b/c https://ru.hexlet.io/courses
-# Failed to create output directory "/var/tmp/a/b/c": ENOENT: no such file or directory, mkdir '/var/tmp/a/b/c'
+page-loader --output /var/tmp/blocker.txt https://ru.hexlet.io/courses
+# Output path "/var/tmp/blocker.txt" is not a directory
 ```
 
 Аналогично оформлены ошибки скачивания и сохранения ресурсов

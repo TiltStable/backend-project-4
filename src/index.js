@@ -200,22 +200,22 @@ const downloadPage = (url, outputDir = process.cwd(), requestOptions = {}) => {
   return (
     Promise.resolve()
       .then(() => new URL(url))
-      // the destination directory is created only if its parent exists:
-      // a missing parent is an error (the course spec forbids auto-creating
-      // missing destination paths), an existing directory is fine,
-      // an existing non-directory path is an error too
+      // the destination directory must already exist: a missing directory
+      // is an error (the course spec forbids auto-creating it), and a
+      // non-directory path is an error too
       .then(() =>
-        fs.mkdir(outputDir).catch((error) => {
-          if (error.code !== "EEXIST") {
-            throw wrapError(error, `Failed to create output directory "${outputDir}"`);
+        fs.stat(outputDir).catch((error) => {
+          if (error.code === "ENOENT") {
+            throw wrapError(error, `Output directory "${outputDir}" does not exist`);
           }
-          return fs.stat(outputDir).then((stat) => {
-            if (!stat.isDirectory()) {
-              throw new Error(`Output path "${outputDir}" exists and is not a directory`);
-            }
-          });
+          throw wrapError(error, `Failed to check output directory "${outputDir}"`);
         }),
       )
+      .then((stat) => {
+        if (!stat.isDirectory()) {
+          throw new Error(`Output path "${outputDir}" is not a directory`);
+        }
+      })
       .then(() =>
         axios
           .get(url, { timeout: DEFAULT_TIMEOUT, ...requestOptions, responseType: "text" })

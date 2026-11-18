@@ -77,25 +77,25 @@ test("saves into process.cwd() when no output dir is given", async () => {
   expect(filePath).toBe(path.join(outputDir, "ru-hexlet-io-courses.html"));
 });
 
-test("rejects when the output directory has a missing parent", async () => {
-  // the destination directory is created only when its parent exists:
-  // a missing directory chain is an error, not something to auto-create
+test("rejects when the output directory does not exist", async () => {
+  // the destination directory must already exist: the utility never
+  // auto-creates it (a missing directory is an error per the course spec)
   const nestedDir = path.join(outputDir, "sub", "dir");
   nock(ORIGIN).get("/courses").reply(200, PAGE_BODY);
 
   await expect(downloadPage(PAGE_URL, nestedDir)).rejects.toThrow(
-    `Failed to create output directory "${nestedDir}"`,
+    `Output directory "${nestedDir}" does not exist`,
   );
   await expect(downloadPage(PAGE_URL, nestedDir)).rejects.toThrow("ENOENT");
 });
 
-test("rejects when the output path is an existing file", async () => {
+test("rejects when the output path is not a directory", async () => {
   nock(ORIGIN).get("/courses").reply(200, PAGE_BODY);
   const filePath = path.join(outputDir, "blocker.txt");
   await fs.writeFile(filePath, "not a directory");
 
   await expect(downloadPage(PAGE_URL, filePath)).rejects.toThrow(
-    `Output path "${filePath}" exists and is not a directory`,
+    `Output path "${filePath}" is not a directory`,
   );
 });
 
@@ -220,24 +220,21 @@ test("rejects and does not save the modified html when an image fails to downloa
   expect(entries).not.toContain("ru-hexlet-io-courses.html");
 });
 
-test("wraps output directory creation failures with a friendly message", async () => {
-  const accessError = new Error(`EACCES: permission denied, mkdir '${outputDir}'`);
-  vi.spyOn(fs, "mkdir").mockRejectedValueOnce(accessError);
+test("wraps output directory stat failures with a friendly message", async () => {
+  const accessError = new Error(`EACCES: permission denied, stat '${outputDir}'`);
+  vi.spyOn(fs, "stat").mockRejectedValueOnce(accessError);
 
   await expect(downloadPage(PAGE_URL, outputDir)).rejects.toThrow(
-    `Failed to create output directory "${outputDir}": EACCES: permission denied, mkdir '${outputDir}'`,
+    `Failed to check output directory "${outputDir}": EACCES: permission denied, stat '${outputDir}'`,
   );
 });
 
-test("wraps resources directory creation failures separately from the output directory", async () => {
+test("wraps resources directory creation failures with a friendly message", async () => {
   const html =
     '<!DOCTYPE html><html><head></head><body><img src="/assets/logo.png" alt="logo"></body></html>';
   nock(ORIGIN).get("/courses").reply(200, html);
-  const realMkdir = fs.mkdir;
   const accessError = new Error("EACCES: permission denied, mkdir resources");
-  vi.spyOn(fs, "mkdir")
-    .mockImplementationOnce((dir, options) => realMkdir(dir, options))
-    .mockRejectedValueOnce(accessError);
+  vi.spyOn(fs, "mkdir").mockRejectedValueOnce(accessError);
 
   const resourcesDir = path.join(outputDir, "ru-hexlet-io-courses_files");
 
